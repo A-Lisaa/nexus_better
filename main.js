@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nexus Better Requiring List
 // @namespace    http://tampermonkey.net/
-// @version      2025-07-06
+// @version      2025-07-07
 // @description  Nya
 // @author       A-Lisa
 // @match        *://www.nexusmods.com/*/mods/*
@@ -18,8 +18,38 @@
         return $("quick-search").attr("game-id");
     }
 
-    async function getSelectedTabId() {
-        return $(".modtabs li").has("a.selected").attr("id");
+    const Tabs = {
+        DESCRIPTION: "description",
+        FILES: "files",
+        IMAGES: "images",
+        VIDEOS: "videos",
+        ARTICLES: "articles",
+        DOCUMENTATION: "documentation",
+        POSTS: "posts",
+        BUGS: "bugs",
+        ACTIONS: "actions",
+        STATS: "stats"
+    };
+
+    async function getSelectedTab() {
+        return $(".modtabs li").has("a.selected").attr("id").split("-").at(-1);
+    }
+
+    async function getRequirementsTable() {
+        // looking for text seems error-prone
+        return $("h3:contains('Nexus requirements') + table");
+    }
+
+    async function getRequirementsTableHead() {
+        return $("thead", await getRequirementsTable());
+    }
+
+    async function getRequirementsTableBody() {
+        return $("tbody", await getRequirementsTable());
+    }
+
+    async function getRequirementsTableRows() {
+        return $("tr", await getRequirementsTableBody());
     }
 
     async function getRequiringTable() {
@@ -140,25 +170,68 @@
         $table.tablesorter({ sortList: [[2, 1]] });
     }
 
-    async function main() {
-        // killLoader function is used when the tab content has loaded so using it as a trigger for modifying the table should be fine
+    var requirementsNotes = {};
+    async function populateRequirementsNotes() {
+        const requirements = await getRequirementsTableRows();
+        requirements.each(function () {
+            const href = $("a", this).attr("href");
+            const note = $(".table-require-notes", this).text();
+            requirementsNotes[href] = note;
+        });
+    }
+
+    async function modifyPopupRequirementsList() {
+        $(".popup-mod-requirements li").each(function () {
+            const href = $("a", this).attr("href");
+            const note = requirementsNotes[href] || "";
+            const span = $("span", this);
+            span.text(`${span.text()} [Notes: ${note}]`);
+        });
+    }
+
+    var lastTab;
+    async function patchKillLoader() {
+        // killLoader function is used when some content has loaded, it could be a tab or a popup or some other shit fuck if i know
         /* global killLoader:writable */ // to make the linter shut up about not knowing killLoader and overriding a native variable
         const originalKillLoader = killLoader;
         killLoader = () => {
             originalKillLoader();
-            $(document).trigger("killLoaderUsed");
+            getSelectedTab().then((tab) => {
+                if (tab !== lastTab) {
+                    const e = new $.Event("tabLoaded");
+                    console.debug(`Changed tab to ${tab}`);
+                    $(document).trigger(e, [ tab ]);
+                }
+                else {
+                    const e = new $.Event("contentLoaded");
+                    console.debug(`Fired contentLoaded`);
+                    $(document).trigger(e);
+                }
+                lastTab = tab;
+            });
         };
+    }
 
-        // tab on initial page load is description
-        if ((await getSelectedTabId()) === "mod-page-tab-description") {
-            modifyRequiringTable();
-        }
+    async function main() {
+        lastTab = await getSelectedTab();
+        patchKillLoader();
 
-        $(document).on("killLoaderUsed", async () => {
-            if ((await getSelectedTabId()) === "mod-page-tab-description") {
+        $(document).on("tabLoaded", async (_, tab) => {
+            if (tab === Tabs.DESCRIPTION) {
                 modifyRequiringTable();
+                populateRequirementsNotes();
             }
         });
+
+        $(document).on("contentLoaded", async () => {
+            $(".popup-mod-requirements").css({ "max-width": "75%" });
+            modifyPopupRequirementsList();
+        });
+
+        $("#slowDownloadButton").click();
+
+        const e = new $.Event("tabLoaded");
+        $(document).trigger(e, [ lastTab ]);
     }
 
     // jQuery 2.2.0 used by nexus can't use async in $()
