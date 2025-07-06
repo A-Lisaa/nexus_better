@@ -98,7 +98,11 @@
         const $totalViewsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
 
         for (const mod of requiringMods) {
-            const stat = stats[mod.id];
+            let stat = stats[mod.id];
+            if (stat === undefined) {
+                console.log(`Stats for the mod with id=${mod.id} aren't in the csv file, substituting with 0`);
+                stat = new ModStats(mod.id, 0, 0, 0);
+            }
             const $uniqueDLsData = $uniqueDLsDataTemplate.clone().text(stat.uniqueDLs);
             const $totalDLsData = $totalDLsDataTemplate.clone().text(stat.totalDLs);
             const $totalViewsData = $totalViewsDataTemplate.clone().text(stat.totalViews);
