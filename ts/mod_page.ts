@@ -4,94 +4,96 @@
 // @version      2025-07-07
 // @description  Nya
 // @author       A-Lisa
-// @match        *://www.nexusmods.com/*/mods/*
+// @match        https://www.nexusmods.com/*/mods/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nexusmods.com
 // @grant        none
 // ==/UserScript==
 
-/* global $ */
-
 (() => {
     "use strict";
 
-    async function getGameId() {
+    async function getGameId(): Promise<string> {
         return $("quick-search").attr("game-id");
     }
 
-    const Tabs = {
-        DESCRIPTION: "description",
-        FILES: "files",
-        IMAGES: "images",
-        VIDEOS: "videos",
-        ARTICLES: "articles",
-        DOCUMENTATION: "documentation",
-        POSTS: "posts",
-        BUGS: "bugs",
-        ACTIONS: "actions",
-        STATS: "stats"
-    };
-
-    async function getSelectedTab() {
-        return $(".modtabs li").has("a.selected").attr("id").split("-").at(-1);
+    enum Tabs {
+        DESCRIPTION = "DESCRIPTION",
+        FILES = "FILES",
+        IMAGES = "IMAGES",
+        VIDEOS = "VIDEOS",
+        ARTICLES = "ARTICLES",
+        DOCUMENTATION = "DOCUMENTATION",
+        POSTS = "POSTS",
+        BUGS = "BUGS",
+        ACTIONS = "ACTIONS",
+        STATS = "STATS"
     }
 
-    async function getRequirementsTable() {
+    async function getSelectedTab(): Promise<Tabs> {
+        return Tabs[$(".modtabs li").has("a.selected").attr("id").split("-").at(-1).toUpperCase()];
+    }
+
+    async function getRequirementsTable(): Promise<JQuery<HTMLElement>> {
         // looking for text seems error-prone
         return $("h3:contains('Nexus requirements') + table");
     }
 
-    async function getRequirementsTableHead() {
+    async function getRequirementsTableHead(): Promise<JQuery<HTMLElement>> {
         return $("thead", await getRequirementsTable());
     }
 
-    async function getRequirementsTableBody() {
+    async function getRequirementsTableBody(): Promise<JQuery<HTMLElement>> {
         return $("tbody", await getRequirementsTable());
     }
 
-    async function getRequirementsTableRows() {
+    async function getRequirementsTableRows(): Promise<JQuery<HTMLElement>> {
         return $("tr", await getRequirementsTableBody());
     }
 
-    async function getRequiringTable() {
+    async function getRequiringTable(): Promise<JQuery<HTMLElement>> {
         return $("h3:contains('Mods requiring this file') + table");
     }
 
-    async function getRequiringTableHead() {
+    async function getRequiringTableHead(): Promise<JQuery<HTMLElement>> {
         return $("thead", await getRequiringTable());
     }
 
-    async function getRequiringTableBody() {
+    async function getRequiringTableBody(): Promise<JQuery<HTMLElement>> {
         return $("tbody", await getRequiringTable());
     }
 
-    async function getRequiringTableRows() {
+    async function getRequiringTableRows(): Promise<JQuery<HTMLElement>> {
         return $("tr", await getRequiringTableBody());
     }
 
     class RequiringMod {
-        constructor($requiringRow) {
-            this.$row = $requiringRow;
-            this.href = $("a", this.$row).attr("href");
+        rowElement: JQuery<HTMLElement>
+        href: string
+        id: number
+
+        constructor(requiringRow: JQuery<HTMLElement>) {
+            this.rowElement = requiringRow;
+            this.href = $("a", this.rowElement).attr("href");
             this.id = parseInt(this.href.split("/").at(-1));
         }
     }
 
-    async function getRequiringMods() {
-        const $requiringRows = await getRequiringTableRows();
-        const requiringMods = $requiringRows.map(function () { return new RequiringMod($(this)); }).get();
+    async function getRequiringMods(): Promise<RequiringMod[]> {
+        const requiringRows = await getRequiringTableRows();
+        const requiringMods = requiringRows.map(function () { return new RequiringMod($(this)); }).get();
         return requiringMods;
     }
 
-    async function getTranslationsLinks() {
+    async function getTranslationsLinks(): Promise<string[]> {
         return $(".table-translation-name > a").map(function () { return $(this).attr("href"); }).get();
     }
 
-    async function hideTranslations(requiringMods) {
+    async function hideTranslations(requiringMods: RequiringMod[]): Promise<void> {
         const translationsLinks = await getTranslationsLinks();
         let hiddenCount = 0;
         for (const mod of requiringMods) {
             if (translationsLinks.includes(mod.href)) {
-                mod.$row.attr("hidden", "");
+                mod.rowElement.attr("hidden", "");
                 hiddenCount++;
             }
         };
@@ -99,7 +101,12 @@
     }
 
     class ModStats {
-        constructor(id, uniqueDLs, totalDLs, totalViews) {
+        id: number
+        uniqueDLs: number
+        totalDLs: number
+        totalViews: number
+
+        constructor(id: number, uniqueDLs: number, totalDLs: number, totalViews: number) {
             this.id = id;
             this.uniqueDLs = uniqueDLs;
             this.totalDLs = totalDLs;
@@ -107,11 +114,11 @@
         }
     }
 
-    async function getModsStats() {
+    async function getModsStats(): Promise<Map<number, ModStats>> {
         const gameId = await getGameId();
         // this csv gets fetched earlier anyway so using it should have no additional cost
         const statsText = await (await fetch(`https://staticstats.nexusmods.com/live_download_counts/mods/${gameId}.csv`)).text();
-        const stats = {};
+        const stats = new Map();
         statsText.split("\n").forEach((modStatsLine) => {
             // each line in csv is id,uniqueDLs,totalDLs,totalViews
             const modStatsArray = modStatsLine.split(",");
@@ -121,7 +128,7 @@
         return stats;
     }
 
-    async function modifyRequiringModsRows(requiringMods) {
+    async function modifyRequiringModsRows(requiringMods: RequiringMod[]) {
         const stats = await getModsStats();
         const $uniqueDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
         const $totalDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
@@ -136,11 +143,11 @@
             const $uniqueDLsData = $uniqueDLsDataTemplate.clone().text(stat.uniqueDLs);
             const $totalDLsData = $totalDLsDataTemplate.clone().text(stat.totalDLs);
             const $totalViewsData = $totalViewsDataTemplate.clone().text(stat.totalViews);
-            mod.$row.append($uniqueDLsData, $totalDLsData, $totalViewsData);
+            mod.rowElement.append($uniqueDLsData, $totalDLsData, $totalViewsData);
         };
     }
 
-    async function modifyRequiringTableHead() {
+    async function modifyRequiringTableHead(): Promise<void> {
         const $tableHead = await getRequiringTableHead();
         // tr gets replaced with its clone to remove all events from the tablesorter
         const $tableHeadRow = $("tr", $tableHead);
@@ -153,13 +160,13 @@
         $("tr", $tableHead).append($uniqueDLsHead, $totalDLsHead, $totalViewsHead);
     }
 
-    async function modifyRequiringTableRows() {
+    async function modifyRequiringTableRows(): Promise<void> {
         const requiringMods = await getRequiringMods();
         hideTranslations(requiringMods);
         await modifyRequiringModsRows(requiringMods);
     }
 
-    async function modifyRequiringTable() {
+    async function modifyRequiringTable(): Promise<void> {
         let $table = await getRequiringTable();
         // table gets replaced with its clone to remove all events from the tablesorter
         const $newTable = $table.clone();
@@ -167,11 +174,12 @@
         $table = $newTable;
         await modifyRequiringTableHead();
         await modifyRequiringTableRows();
+        // @ts-ignore
         $table.tablesorter({ sortList: [[2, 1]] });
     }
 
     var requirementsNotes = {};
-    async function populateRequirementsNotes() {
+    async function populateRequirementsNotes(): Promise<void> {
         const requirements = await getRequirementsTableRows();
         requirements.each(function () {
             const href = $("a", this).attr("href");
@@ -180,7 +188,7 @@
         });
     }
 
-    async function modifyPopupRequirementsList() {
+    async function modifyPopupRequirementsList(): Promise<void> {
         $(".popup-mod-requirements li").each(function () {
             const href = $("a", this).attr("href");
             const note = requirementsNotes[href] || "";
@@ -189,11 +197,13 @@
         });
     }
 
-    var lastTab;
-    async function patchKillLoader() {
+    var lastTab: Tabs;
+    async function patchKillLoader(): Promise<void> {
         // killLoader function is used when some content has loaded, it could be a tab or a popup or some other shit fuck if i know
         /* global killLoader:writable */ // to make the linter shut up about not knowing killLoader and overriding a native variable
+        // @ts-ignore
         const originalKillLoader = killLoader;
+        // @ts-ignore
         killLoader = () => {
             originalKillLoader();
             getSelectedTab().then((tab) => {
@@ -212,7 +222,7 @@
         };
     }
 
-    async function main() {
+    async function main(): Promise<void> {
         lastTab = await getSelectedTab();
         patchKillLoader();
 
@@ -228,7 +238,7 @@
             modifyPopupRequirementsList();
         });
 
-        $("#slowDownloadButton").click();
+        $("#slowDownloadButton").trigger("click");
 
         const e = new $.Event("tabLoaded");
         $(document).trigger(e, [ lastTab ]);

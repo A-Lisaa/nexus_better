@@ -1,0 +1,10 @@
+{
+    "include": [
+        "./ts"
+    ],
+    "compilerOptions": {
+        "target": "esnext",
+        "lib": ["ESNext", "DOM"],
+        "outDir": "./js"
+    }
+}
