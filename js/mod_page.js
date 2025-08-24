@@ -10,79 +10,63 @@
 // ==/UserScript==
 (() => {
     "use strict";
-    async function getGameId() {
-        return $("quick-search").attr("game-id");
-    }
     let Tabs;
     (function (Tabs) {
-        Tabs["DESCRIPTION"] = "DESCRIPTION";
-        Tabs["FILES"] = "FILES";
-        Tabs["IMAGES"] = "IMAGES";
-        Tabs["VIDEOS"] = "VIDEOS";
-        Tabs["ARTICLES"] = "ARTICLES";
-        Tabs["DOCUMENTATION"] = "DOCUMENTATION";
-        Tabs["POSTS"] = "POSTS";
-        Tabs["BUGS"] = "BUGS";
-        Tabs["ACTIONS"] = "ACTIONS";
-        Tabs["STATS"] = "STATS";
+        Tabs[Tabs["Description"] = 0] = "Description";
+        Tabs[Tabs["Files"] = 1] = "Files";
+        Tabs[Tabs["Images"] = 2] = "Images";
+        Tabs[Tabs["Videos"] = 3] = "Videos";
+        Tabs[Tabs["Article"] = 4] = "Article";
+        Tabs[Tabs["Documentation"] = 5] = "Documentation";
+        Tabs[Tabs["Posts"] = 6] = "Posts";
+        Tabs[Tabs["Forum"] = 7] = "Forum";
+        Tabs[Tabs["Bug"] = 8] = "Bug";
+        Tabs[Tabs["Actions"] = 9] = "Actions";
+        Tabs[Tabs["Stats"] = 10] = "Stats";
     })(Tabs || (Tabs = {}));
-    async function getSelectedTab() {
-        return Tabs[$(".modtabs li").has("a.selected").attr("id").split("-").at(-1).toUpperCase()];
-    }
-    async function getRequirementsTable() {
-        // looking for text seems error-prone
-        return $("h3:contains('Nexus requirements') + table");
-    }
-    async function getRequirementsTableHead() {
-        return $("thead", await getRequirementsTable());
-    }
-    async function getRequirementsTableBody() {
-        return $("tbody", await getRequirementsTable());
-    }
-    async function getRequirementsTableRows() {
-        return $("tr", await getRequirementsTableBody());
-    }
-    async function getRequiringTable() {
-        return $("h3:contains('Mods requiring this file') + table");
-    }
-    async function getRequiringTableHead() {
-        return $("thead", await getRequiringTable());
-    }
-    async function getRequiringTableBody() {
-        return $("tbody", await getRequiringTable());
-    }
-    async function getRequiringTableRows() {
-        return $("tr", await getRequiringTableBody());
-    }
-    class RequiringMod {
-        rowElement;
-        href;
-        id;
-        constructor(requiringRow) {
-            this.rowElement = requiringRow;
-            this.href = $("a", this.rowElement).attr("href");
-            this.id = parseInt(this.href.split("/").at(-1));
+    class ModRow {
+        element;
+        constructor(element) {
+            this.element = element;
+        }
+        get href() {
+            return $("a", this.element).attr("href");
+        }
+        get id() {
+            return parseInt(this.href.split("/").at(-1));
+        }
+        async hide() {
+            this.element.attr("hidden", "");
         }
     }
-    async function getRequiringMods() {
-        const requiringRows = await getRequiringTableRows();
-        const requiringMods = requiringRows.map(function () { return new RequiringMod($(this)); }).get();
-        return requiringMods;
-    }
-    async function getTranslationsLinks() {
-        return $(".table-translation-name > a").map(function () { return $(this).attr("href"); }).get();
-    }
-    async function hideTranslations(requiringMods) {
-        const translationsLinks = await getTranslationsLinks();
-        let hiddenCount = 0;
-        for (const mod of requiringMods) {
-            if (translationsLinks.includes(mod.href)) {
-                mod.rowElement.attr("hidden", "");
-                hiddenCount++;
-            }
+    class ModsTable {
+        element;
+        constructor(element) {
+            this.element = element;
         }
-        ;
-        console.log(`Finished removing translations, removed ${hiddenCount} translations`);
+        get head() {
+            return $("thead", this.element);
+        }
+        get headers() {
+            return $("tr", this.head);
+        }
+        get body() {
+            return $("tbody", this.element);
+        }
+        get rows() {
+            return $("tr", this.body);
+        }
+        get mods() {
+            return this.rows.map(function () {
+                // local this - each row
+                return new ModRow($(this));
+            }).get();
+        }
+        async resetHandlers() {
+            const newElement = this.element.clone();
+            this.element.replaceWith(newElement);
+            this.element = newElement;
+        }
     }
     class ModStats {
         id;
@@ -96,73 +80,89 @@
             this.totalViews = totalViews;
         }
     }
-    async function getModsStats() {
-        const gameId = await getGameId();
-        // this csv gets fetched earlier anyway so using it should have no additional cost
-        const statsText = await (await fetch(`https://staticstats.nexusmods.com/live_download_counts/mods/${gameId}.csv`)).text();
-        const stats = new Map();
-        statsText.split("\n").forEach((modStatsLine) => {
-            // each line in csv is id,uniqueDLs,totalDLs,totalViews
-            const modStatsArray = modStatsLine.split(",");
-            const modStats = new ModStats(parseInt(modStatsArray[0]), parseInt(modStatsArray[2]), parseInt(modStatsArray[1]), parseInt(modStatsArray[3]));
-            stats[modStats.id] = modStats;
-        });
-        return stats;
+    // practically consts
+    var requirementsTable;
+    var requiringTable;
+    var translationsTable;
+    var gameId;
+    const modsStats = new Map();
+    const requirementsNotes = new Map();
+    function selectedTab() {
+        return Tabs[$(".modtabs .selected span").text()];
     }
-    async function modifyRequiringModsRows(requiringMods) {
-        const stats = await getModsStats();
-        const $uniqueDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
-        const $totalDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
-        const $totalViewsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
-        for (const mod of requiringMods) {
-            let stat = stats[mod.id];
-            if (stat === undefined) {
-                console.log(`Stats for the mod with id=${mod.id} aren't in the csv file, substituting with 0`);
-                stat = new ModStats(mod.id, 0, 0, 0);
-            }
-            const $uniqueDLsData = $uniqueDLsDataTemplate.clone().text(stat.uniqueDLs);
-            const $totalDLsData = $totalDLsDataTemplate.clone().text(stat.totalDLs);
-            const $totalViewsData = $totalViewsDataTemplate.clone().text(stat.totalViews);
-            mod.rowElement.append($uniqueDLsData, $totalDLsData, $totalViewsData);
-        }
-        ;
+    ;
+    async function setModsTables() {
+        // looking for text seems error-prone
+        requirementsTable = new ModsTable($("h3:contains('Nexus requirements') + table"));
+        requiringTable = new ModsTable($("h3:contains('Mods requiring this file') + table"));
+        translationsTable = new ModsTable($("h3:contains('Translations available on the Nexus') + table"));
     }
-    async function modifyRequiringTableHead() {
-        const $tableHead = await getRequiringTableHead();
-        // tr gets replaced with its clone to remove all events from the tablesorter
-        const $tableHeadRow = $("tr", $tableHead);
-        $tableHeadRow.replaceWith($tableHeadRow.clone());
-        const $uniqueDLsHead = $("<th class='table-require-uniqueDLs header' style='width: 12.5%'><span class='table-header'>Unique DLs</span></th>");
-        const $totalDLsHead = $("<th class='table-require-totalDLs header' style='width: 12.5%'><span class='table-header'>Total DLs</span></th>");
-        const $totalViewsHead = $("<th class='table-require-totalViews header' style='width: 12.5%'><span class='table-header'>Total Views</span></th>");
-        $("tr", $tableHead).append($uniqueDLsHead, $totalDLsHead, $totalViewsHead);
-    }
-    async function modifyRequiringTableRows() {
-        const requiringMods = await getRequiringMods();
-        hideTranslations(requiringMods);
-        await modifyRequiringModsRows(requiringMods);
-    }
-    async function modifyRequiringTable() {
-        let $table = await getRequiringTable();
-        // table gets replaced with its clone to remove all events from the tablesorter
-        const $newTable = $table.clone();
-        $table.replaceWith($newTable);
-        $table = $newTable;
-        await modifyRequiringTableHead();
-        await modifyRequiringTableRows();
-        // @ts-ignore
-        $table.tablesorter({ sortList: [[2, 1]] });
-    }
-    var requirementsNotes = {};
+    // call if tab is description
     async function populateRequirementsNotes() {
-        const requirements = await getRequirementsTableRows();
+        const requirements = requirementsTable.rows;
         requirements.each(function () {
             const href = $("a", this).attr("href");
             const note = $(".table-require-notes", this).text();
             requirementsNotes[href] = note;
         });
     }
+    async function processDownloadCountResponse(response) {
+        const statsText = await response.text();
+        // Papa exists on nexus
+        // @ts-ignore
+        await Papa.parse(statsText).data.forEach((modStatsArray) => {
+            // each line in csv is id,totalDLs,uniqueDLs,totalViews
+            const modStats = new ModStats(parseInt(modStatsArray[0]), parseInt(modStatsArray[2]), parseInt(modStatsArray[1]), parseInt(modStatsArray[3]));
+            modsStats[modStats.id] = modStats;
+        });
+    }
+    async function modifyRequiringTableHeaders() {
+        const uniqueDLsHeader = $("<th class='table-require-uniqueDLs header' style='width: 12.5%'><span class='table-header'>Unique DLs</span></th>");
+        const totalDLsHeader = $("<th class='table-require-totalDLs header' style='width: 12.5%'><span class='table-header'>Total DLs</span></th>");
+        const totalViewsHeader = $("<th class='table-require-totalViews header' style='width: 12.5%'><span class='table-header'>Total Views</span></th>");
+        requiringTable.headers.append(uniqueDLsHeader, totalDLsHeader, totalViewsHeader);
+    }
+    async function modifyRequiringTableRows() {
+        const translationsTableModsLinks = translationsTable.mods.map((mod) => mod.href);
+        const uniqueDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
+        const totalDLsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
+        const totalViewsDataTemplate = $("<td class='table-require-uniqueDLs'></td>");
+        const requiringTableMods = requiringTable.mods;
+        let hiddenCount = 0;
+        let showedStatsCount = 0;
+        for (const mod of requiringTableMods) {
+            if (translationsTableModsLinks.includes(mod.href)) {
+                mod.hide();
+                hiddenCount++;
+            }
+            else {
+                // if stats aren't in the csv file (if it hasn't been updated yet for example), substitute them with 0
+                const stats = modsStats[mod.id] || new ModStats(mod.id, 0, 0, 0);
+                const uniqueDLsData = uniqueDLsDataTemplate.clone().text(stats.uniqueDLs);
+                const totalDLsData = totalDLsDataTemplate.clone().text(stats.totalDLs);
+                const totalViewsData = totalViewsDataTemplate.clone().text(stats.totalViews);
+                mod.element.append(uniqueDLsData, totalDLsData, totalViewsData);
+                showedStatsCount++;
+            }
+        }
+        ;
+        if (requiringTableMods.length !== hiddenCount + showedStatsCount) {
+            console.warn(`Counts mismatch; Total requiring mods: ${requiringTableMods.length}; Hidden mods: ${hiddenCount}; Showed stats for mods: ${showedStatsCount}`);
+        }
+    }
+    async function modifyRequiringTable() {
+        // call resetHandlers earlier so that it doesn't interrupt modifications
+        await requiringTable.resetHandlers();
+        await Promise.all([
+            modifyRequiringTableHeaders(),
+            modifyRequiringTableRows()
+        ]);
+        // tablesorter exists in the nexus's jQuery
+        // @ts-ignore
+        requiringTable.element.tablesorter({ sortList: [[2, 1]] });
+    }
     async function modifyPopupRequirementsList() {
+        $(".popup-mod-requirements").css({ "max-width": "75%" });
         $(".popup-mod-requirements li").each(function () {
             const href = $("a", this).attr("href");
             const note = requirementsNotes[href] || "";
@@ -170,47 +170,32 @@
             span.text(`${span.text()} [Notes: ${note}]`);
         });
     }
-    var lastTab;
-    async function patchKillLoader() {
-        // killLoader function is used when some content has loaded, it could be a tab or a popup or some other shit fuck if i know
-        /* global killLoader:writable */ // to make the linter shut up about not knowing killLoader and overriding a native variable
-        // @ts-ignore
-        const originalKillLoader = killLoader;
-        // @ts-ignore
-        killLoader = () => {
-            originalKillLoader();
-            getSelectedTab().then((tab) => {
-                if (tab !== lastTab) {
-                    const e = new $.Event("tabLoaded");
-                    console.debug(`Changed tab to ${tab}`);
-                    $(document).trigger(e, [tab]);
-                }
-                else {
-                    const e = new $.Event("contentLoaded");
-                    console.debug(`Fired contentLoaded`);
-                    $(document).trigger(e);
-                }
-                lastTab = tab;
-            });
-        };
-    }
-    async function main() {
-        lastTab = await getSelectedTab();
-        patchKillLoader();
-        $(document).on("tabLoaded", async (_, tab) => {
-            if (tab === Tabs.DESCRIPTION) {
-                modifyRequiringTable();
-                populateRequirementsNotes();
+    async function afterLoad() {
+        gameId = parseInt($("quick-search").attr("game-id"));
+        const widgetActionMap = new Map([
+            ["ModDescriptionTab", async () => {
+                    await Promise.all([
+                        setModsTables(),
+                        fetch(`https://staticstats.nexusmods.com/live_download_counts/mods/${gameId}.csv`).then(processDownloadCountResponse)
+                    ]);
+                    modifyRequiringTable();
+                    populateRequirementsNotes();
+                }],
+            ["ModRequirementsPopUp", modifyPopupRequirementsList]
+        ]);
+        $(document).on("ajaxComplete", (e, xhr, settings) => {
+            const url = settings.url;
+            const widget = url.substring(url.lastIndexOf("/") + 1, url.indexOf("?"));
+            const action = widgetActionMap.get(widget);
+            if (action !== undefined) {
+                action();
             }
         });
-        $(document).on("contentLoaded", async () => {
-            $(".popup-mod-requirements").css({ "max-width": "75%" });
-            modifyPopupRequirementsList();
-        });
+        // call the action for selected tab
+        widgetActionMap.get(`Mod${Tabs[selectedTab()]}Tab`)();
+        // trigger the slow download button on the download file page
         $("#slowDownloadButton").trigger("click");
-        const e = new $.Event("tabLoaded");
-        $(document).trigger(e, [lastTab]);
     }
     // jQuery 2.2.0 used by nexus can't use async in $()
-    $(() => main().then());
+    $(() => afterLoad());
 })();

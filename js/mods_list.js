@@ -8,59 +8,50 @@
 // @match        https://next.nexusmods.com/profile/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nexusmods.com
 // @grant        none
-// @run-at document-start
-// @require https://code.jquery.com/jquery-2.2.0.min.js
+// @run-at       document-start
+// @require      https://code.jquery.com/jquery-2.2.0.min.js
 // ==/UserScript==
 // we use jquery 2.2.0 to be consistent with the version used on a mod page
 (() => {
     "use strict";
-    /**
-     * A Map that associates keys with arrays of values.
-     * Provides a convenient method to add elements to the array associated with a key.
-     * @template TKey The type of keys in the map.
-     * @template TArrayElement The type of elements in the arrays.
-     */
-    class ArrayValueMap extends Map {
-        /**
-         * Adds one or more elements to the array associated with the specified key.
-         * If the key does not exist, a new array is created with the provided elements.
-         * If the key exists, the elements are appended to the existing array.
-         * @param key The key to which the elements should be added.
-         * @param elements The elements to add to the array.
-         */
-        add(key, ...elements) {
-            const array = this.get(key);
-            if (array === undefined) {
-                this.set(key, elements);
-            }
-            else {
-                array.push(...elements);
-            }
-        }
-    }
-    const responseProcessors = new ArrayValueMap();
+    const responseProcessors = [];
     async function patchFetch() {
         const originalFetch = window.fetch;
-        window.fetch = async (resource, options) => {
-            console.debug("Called fetch with:\nresource =\n", resource, "\noptions =\n", options);
+        window.fetch = async function (resource, options = {}) {
             const response = await originalFetch(resource, options);
             const resourceURL = resource instanceof Request ? resource.url : resource instanceof URL ? resource.href : resource;
             const optionsJSON = JSON.parse(JSON.stringify(options));
-            optionsJSON.body = JSON.parse(optionsJSON.body);
-            const processors = responseProcessors.get(resourceURL);
-            if (processors !== undefined) {
-                for (const processor of processors) {
-                    processor(response.clone(), optionsJSON);
-                }
+            if (optionsJSON.body !== undefined) {
+                optionsJSON.body = JSON.parse(optionsJSON.body);
+            }
+            for (const processor of responseProcessors) {
+                processor(resourceURL, optionsJSON, response.clone(), "fetch");
             }
             return response;
         };
     }
+    async function patchXHRSend() {
+        const originalXHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function (body) {
+            const originalXHRonreadystatechange = this.onreadystatechange;
+            this.onreadystatechange = function () {
+                if (this.readyState !== XMLHttpRequest.DONE)
+                    return;
+                for (const processor of responseProcessors) {
+                    processor(this.responseURL, {}, this.response, "xhr");
+                }
+                if (originalXHRonreadystatechange !== null) {
+                    originalXHRonreadystatechange.apply(this);
+                }
+            };
+            return originalXHRSend.apply(this, body);
+        };
+    }
     let ModTileTypes;
     (function (ModTileTypes) {
-        ModTileTypes["Standard"] = "mod-tile";
-        ModTileTypes["Compact"] = "mod-tile-compact";
-        ModTileTypes["List"] = "mod-tile-list";
+        ModTileTypes[ModTileTypes["Standard"] = "mod-tile"] = "Standard";
+        ModTileTypes[ModTileTypes["Compact"] = "mod-tile-compact"] = "Compact";
+        ModTileTypes[ModTileTypes["List"] = "mod-tile-list"] = "List";
     })(ModTileTypes || (ModTileTypes = {}));
     class Mod {
         element;
@@ -120,16 +111,6 @@
         }
     }
     const modsData = new Map();
-    async function processApiRouterResponse(response, options) {
-        if (["UserMods", "ModsListing"].includes(options.body.operationName)) {
-            const json = await response.json();
-            const data = json.data;
-            const modsList = data.mods.nodes;
-            for (const mod of modsList) {
-                modsData[mod.modId] = mod;
-            }
-        }
-    }
     async function createModsGridChangedEvent() {
         const targetNode = $(".mods-grid, .mods-grid-compact, .mods-grid-list")[0];
         const config = { attibutes: true, childList: true, subtree: true };
@@ -139,8 +120,20 @@
         });
         observer.observe(targetNode, config);
     }
+    async function processApiRouterResponse(request, options, response) {
+        if (request !== "https://api-router.nexusmods.com/graphql")
+            return;
+        if (["UserMods", "ModsListing"].includes(options.body.operationName)) {
+            const json = await response.json();
+            const data = json.data;
+            const modsList = data.mods.nodes;
+            for (const mod of modsList) {
+                modsData[mod.modId] = mod;
+            }
+        }
+        createModsGridChangedEvent();
+    }
     async function modifyModsGrid(e, observer) {
-        // await modifyMods();
         const modGrid = new ModGrid();
         await Promise.all(modGrid.mods.map((mod) => {
             const dateDownloaded = new Date(modsData[mod.id].viewerDownloaded);
@@ -149,13 +142,10 @@
         // remove records of our modifications so the observer doesn't trigger because of them
         observer.takeRecords();
     }
-    async function main() {
+    async function beforeLoad() {
         patchFetch();
-        responseProcessors.add("https://api-router.nexusmods.com/graphql", processApiRouterResponse);
-        responseProcessors.add("https://api-router.nexusmods.com/graphql", createModsGridChangedEvent);
-        // createBodyChangedEvent();
-        // $(document).on("bodyChanged", createModsGridChangedEvent);
+        responseProcessors.push(processApiRouterResponse);
         $(document).on("modsGridChanged", modifyModsGrid);
     }
-    main();
+    beforeLoad();
 })();
