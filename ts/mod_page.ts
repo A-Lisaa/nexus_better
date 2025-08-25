@@ -26,6 +26,20 @@
         Stats
     }
 
+    class ModStats {
+        id: number
+        uniqueDLs: number
+        totalDLs: number
+        totalViews: number
+
+        constructor(id: number, uniqueDLs: number, totalDLs: number, totalViews: number) {
+            this.id = id;
+            this.uniqueDLs = uniqueDLs;
+            this.totalDLs = totalDLs;
+            this.totalViews = totalViews;
+        }
+    }
+
     class ModRow {
         element: JQuery
 
@@ -39,6 +53,11 @@
 
         get id(): number {
             return parseInt(this.href.split("/").at(-1));
+        }
+
+        get stats(): ModStats {
+            const stats = modsStats.get(this.id) || new ModStats(this.id, 0, 0, 0);
+            return stats;
         }
 
         async hide(): Promise<void> {
@@ -76,33 +95,21 @@
             }).get();
         }
 
-        async resetHandlers(): Promise<void> {
+        async removeHandlers(): Promise<void> {
             const newElement = this.element.clone();
             this.element.replaceWith(newElement);
             this.element = newElement;
         }
     }
 
-    class ModStats {
-        id: number
-        uniqueDLs: number
-        totalDLs: number
-        totalViews: number
-
-        constructor(id: number, uniqueDLs: number, totalDLs: number, totalViews: number) {
-            this.id = id;
-            this.uniqueDLs = uniqueDLs;
-            this.totalDLs = totalDLs;
-            this.totalViews = totalViews;
-        }
-    }
-
     // practically consts
+    var gameId: number;
     var requirementsTable: ModsTable;
     var requiringTable: ModsTable;
     var translationsTable: ModsTable;
-    var gameId: number;
+    // map of mod's id to it's stats
     const modsStats: Map<number, ModStats> = new Map();
+    // map of mod's href to it's note in the requirements table
     const requirementsNotes: Map<string, string> = new Map();
 
     function selectedTab(): Tabs {
@@ -122,7 +129,7 @@
         requirements.each(function () {
             const href = $("a", this).attr("href");
             const note = $(".table-require-notes", this).text();
-            requirementsNotes[href] = note;
+            requirementsNotes.set(href, note);
         });
     }
 
@@ -133,7 +140,7 @@
         await Papa.parse(statsText).data.forEach((modStatsArray: Array<string>) => {
             // each line in csv is id,totalDLs,uniqueDLs,totalViews
             const modStats = new ModStats(parseInt(modStatsArray[0]), parseInt(modStatsArray[2]), parseInt(modStatsArray[1]), parseInt(modStatsArray[3]));
-            modsStats[modStats.id] = modStats;
+            modsStats.set(modStats.id, modStats);
         });
     }
 
@@ -161,7 +168,7 @@
             }
             else {
                 // if stats aren't in the csv file (if it hasn't been updated yet for example), substitute them with 0
-                const stats = modsStats[mod.id] || new ModStats(mod.id, 0, 0, 0);
+                const stats = modsStats.get(mod.id) || new ModStats(mod.id, 0, 0, 0);
 
                 const uniqueDLsData = uniqueDLsDataTemplate.clone().text(stats.uniqueDLs);
                 const totalDLsData = totalDLsDataTemplate.clone().text(stats.totalDLs);
@@ -178,7 +185,7 @@
 
     async function modifyRequiringTable(): Promise<void> {
         // call resetHandlers earlier so that it doesn't interrupt modifications
-        await requiringTable.resetHandlers();
+        await requiringTable.removeHandlers();
         await Promise.all([
             modifyRequiringTableHeaders(),
             modifyRequiringTableRows()
@@ -189,10 +196,13 @@
     }
 
     async function modifyPopupRequirementsList(): Promise<void> {
+        // make the popup wider to fit longer mod names and notes
         $(".popup-mod-requirements").css({ "max-width": "75%" });
+        // add the note from requirementsNotes to each mod's link
         $(".popup-mod-requirements li").each(function () {
+            // local this - each mod's li
             const href = $("a", this).attr("href");
-            const note = requirementsNotes[href] || "";
+            const note = requirementsNotes.get(href) || "";
             const span = $("span", this);
             span.text(`${span.text()} [Notes: ${note}]`);
         });
@@ -222,7 +232,7 @@
             }
         });
 
-        // call the action for selected tab
+        // call the action for selected tab if it exists
         const action = widgetActionMap.get(`Mod${Tabs[selectedTab()]}Tab`);
         if (action !== undefined) {
             action();
