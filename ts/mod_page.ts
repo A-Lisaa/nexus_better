@@ -223,7 +223,10 @@
         });
 
         // call the action for selected tab
-        widgetActionMap.get(`Mod${Tabs[selectedTab()]}Tab`)();
+        const action = widgetActionMap.get(`Mod${Tabs[selectedTab()]}Tab`);
+        if (action !== undefined) {
+            action();
+        }
 
         // trigger the slow download button on the download file page
         $("#slowDownloadButton").trigger("click");
