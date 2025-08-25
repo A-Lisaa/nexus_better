@@ -60,13 +60,129 @@
         }
     }
 
+    type ModDataGame = { domainName: string, id: number, name: string };
+    type ModDataModCategory = { categoryId: number, name: string };
+    type ModDataUploader = { avatar: string, memberId: number, name: string };
+    class ModData {
+        // should really be an object with all of the original data fields but i'm too fucking lazy
+        rawData: any
+
+        constructor(rawData: any) {
+            this.rawData = rawData;
+        }
+
+        get adultContent(): boolean {
+            return this.rawData.adultContent;
+        }
+
+        get createdAt(): Date {
+            return new Date(this.rawData.createdAt);
+        }
+
+        get downloads(): number {
+            return this.rawData.downloads;
+        }
+
+        get endorsements(): number {
+            return this.rawData.endorsements;
+        }
+
+        get fileSize(): number {
+            return this.rawData.fileSize;
+        }
+
+        get game(): ModDataGame {
+            return this.rawData.game;
+        }
+
+        get modCategory(): ModDataModCategory {
+            return this.rawData.modCategory;
+        }
+
+        get modId(): number {
+            return this.rawData.modId;
+        }
+
+        get name(): string {
+            return this.rawData.name;
+        }
+
+        get status(): string {
+            return this.rawData.status;
+        }
+
+        get summary(): string {
+            return this.rawData.summary;
+        }
+
+        get thumbnailUrl(): string {
+            return this.rawData.thumbnailUrl;
+        }
+
+        get thumbnailBlurredUrl(): string {
+            return this.rawData.thumbnailBlurredUrl;
+        }
+
+        get uid(): string {
+            return this.rawData.uid;
+        }
+
+        get updatedAt(): Date {
+            return new Date(this.rawData.updatedAt);
+        }
+
+        get uploader(): ModDataUploader {
+            return this.rawData.uploader;
+        }
+
+        /**
+         * null if hasn't been downloaded
+         */
+        get viewerDownloaded(): Date | null {
+            const viewerDownloaded = this.rawData.viewerDownloaded;
+            if (viewerDownloaded === null)
+                return null;
+            return new Date(this.rawData.viewerDownloaded);
+        }
+
+        /**
+         * null if HAS NEVER BEEN endorsed, false if WAS endorsed, true if IS endorsed
+         */
+        get viewerEndorsed(): boolean | null {
+            return this.rawData.viewerEndorsed;
+        }
+
+        get viewerTracked(): boolean {
+            return this.rawData.viewerTracked;
+        }
+
+        /**
+         * null if hasn't been downloaded (check if viewerDownloaded is null)
+         */
+        get viewerUpdateAvailable(): boolean | null {
+            return this.rawData.viewerUpdateAvailable;
+        }
+
+        get viewerIsBlocked(): boolean {
+            return this.rawData.viewerIsBlocked;
+        }
+
+        get isDownloaded(): boolean {
+            return this.viewerDownloaded !== null;
+        }
+
+        get isUpdated(): boolean {
+            return this.viewerUpdateAvailable === true;
+        }
+    }
+
     enum ModTileTypes {
         Standard = "mod-tile" as any,
         Compact = "mod-tile-compact" as any,
         List = "mod-tile-list" as any
     }
 
-    class Mod {
+    class ModTile {
         element: JQuery
 
         constructor(element: JQuery) {
@@ -86,27 +202,12 @@
             return parseInt(this.href.split("/").at(-1));
         }
 
+        get data(): ModData {
+            return modsData.get(this.id);
+        }
+
         get downloadedMark(): JQuery {
             return $("[data-e2eid='mod-tile-downloaded']", this.element);
-        }
-
-        get isDownloaded(): boolean {
-            return this.downloadedMark.length > 0;
-        }
-
-        get isUpdated(): boolean {
-            return $("[data-e2eid='mod-tile-update-available']", this.element).length > 0;
-        }
-
-        async addDownloadDate(date: Date): Promise<void> {
-            if (!this.isDownloaded)
-                return;
-
-            if ($("span.text-neutral-inverted", this.element).length === 0) {
-                const localeDate = new Intl.DateTimeFormat().format(date);
-                const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
-                this.downloadedMark.append(dateSpan);
-            }
         }
     }
 
@@ -129,15 +230,16 @@
             }
         }
 
-        get mods(): Array<Mod> {
+        get mods(): Array<ModTile> {
             const modsElements = $(`[data-e2eid='${this.type}']`, this.element);
             return modsElements
-                .map((index, element) => new Mod($(element)))
+                .map((index, element) => new ModTile($(element)))
                 .get();
         }
     }
 
-    const modsData: Map<string, object> = new Map();
+    // map of mod id to ModData
+    const modsData: Map<number, ModData> = new Map();
 
     async function createModsGridChangedEvent(): Promise<void> {
         const targetNode = $(".mods-grid, .mods-grid-compact, .mods-grid-list")[0];
@@ -153,23 +255,36 @@
         if (request !== "https://api-router.nexusmods.com/graphql")
             return;
 
-        if (["UserMods", "ModsListing"].includes(options.body.operationName)) {
+        if (options.body.operationName === "UserMods" || options.body.operationName === "ModsListing") {
             const json = await response.json();
             const data = json.data;
             const modsList = data.mods.nodes;
-            for (const mod of modsList) {
-                modsData[mod.modId] = mod;
+            for (const modObject of modsList) {
+                const modData = new ModData(modObject);
+                modsData.set(modData.modId, modData);
             }
         }
 
         createModsGridChangedEvent();
     }
 
+    async function modifyModTile(mod: ModTile) {
+        if (!mod.data.isDownloaded)
+            return;
+
+        // date span has already been added to the checkmark element
+        if ($("span.text-neutral-inverted", mod.downloadedMark).length !== 0)
+            return;
+
+        const localeDate = new Intl.DateTimeFormat().format(mod.data.viewerDownloaded);
+        const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
+        mod.downloadedMark.append(dateSpan);
+    }
+
     async function modifyModsGrid(e: JQuery.Event, observer: MutationObserver): Promise<void> {
         const modGrid = new ModGrid();
         await Promise.all(modGrid.mods.map((mod) => {
-            const dateDownloaded = new Date(modsData[mod.id].viewerDownloaded);
-            mod.addDownloadDate(dateDownloaded);
+            modifyModTile(mod);
         }));
         // remove records of our modifications so the observer doesn't trigger because of them
         observer.takeRecords();

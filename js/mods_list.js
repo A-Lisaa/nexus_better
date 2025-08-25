@@ -47,13 +47,101 @@
             return originalXHRSend.apply(this, body);
         };
     }
+    class ModData {
+        // should really be an object with all of the original data fields but i'm too fucking lazy
+        rawData;
+        constructor(rawData) {
+            this.rawData = rawData;
+        }
+        get adultContent() {
+            return this.rawData.adultContent;
+        }
+        get createdAt() {
+            return new Date(this.rawData.createdAt);
+        }
+        get downloads() {
+            return this.rawData.downloads;
+        }
+        get endorsements() {
+            return this.rawData.endorsements;
+        }
+        get fileSize() {
+            return this.rawData.fileSize;
+        }
+        get game() {
+            return this.rawData.game;
+        }
+        get modCategory() {
+            return this.rawData.modCategory;
+        }
+        get modId() {
+            return this.rawData.modId;
+        }
+        get name() {
+            return this.rawData.name;
+        }
+        get status() {
+            return this.rawData.status;
+        }
+        get summary() {
+            return this.rawData.summary;
+        }
+        get thumbnailUrl() {
+            return this.rawData.thumbnailUrl;
+        }
+        get thumbnailBlurredUrl() {
+            return this.rawData.thumbnailBlurredUrl;
+        }
+        get uid() {
+            return this.rawData.uid;
+        }
+        get updatedAt() {
+            return new Date(this.rawData.updatedAt);
+        }
+        get uploader() {
+            return this.rawData.uploader;
+        }
+        /**
+         * null if hasn't been downloaded
+         */
+        get viewerDownloaded() {
+            const viewerDownloaded = this.rawData.viewerDownloaded;
+            if (viewerDownloaded === null)
+                return null;
+            return new Date(this.rawData.viewerDownloaded);
+        }
+        /**
+         * null if HAS NEVER BEEN endorsed, false if WAS endorsed, true if IS endorsed
+         */
+        get viewerEndorsed() {
+            return this.rawData.viewerEndorsed;
+        }
+        get viewerTracked() {
+            return this.rawData.viewerTracked;
+        }
+        /**
+         * null if hasn't been downloaded (check if viewerDownloaded is null)
+         */
+        get viewerUpdateAvailable() {
+            return this.rawData.viewerUpdateAvailable;
+        }
+        get viewerIsBlocked() {
+            return this.rawData.viewerIsBlocked;
+        }
+        get isDownloaded() {
+            return this.viewerDownloaded !== null;
+        }
+        get isUpdated() {
+            return this.viewerUpdateAvailable === true;
+        }
+    }
     let ModTileTypes;
     (function (ModTileTypes) {
         ModTileTypes[ModTileTypes["Standard"] = "mod-tile"] = "Standard";
         ModTileTypes[ModTileTypes["Compact"] = "mod-tile-compact"] = "Compact";
         ModTileTypes[ModTileTypes["List"] = "mod-tile-list"] = "List";
     })(ModTileTypes || (ModTileTypes = {}));
-    class Mod {
+    class ModTile {
         element;
         constructor(element) {
             this.element = element;
@@ -68,23 +156,11 @@
         get id() {
             return parseInt(this.href.split("/").at(-1));
         }
+        get data() {
+            return modsData.get(this.id);
+        }
         get downloadedMark() {
             return $("[data-e2eid='mod-tile-downloaded']", this.element);
-        }
-        get isDownloaded() {
-            return this.downloadedMark.length > 0;
-        }
-        get isUpdated() {
-            return $("[data-e2eid='mod-tile-update-available']", this.element).length > 0;
-        }
-        async addDownloadDate(date) {
-            if (!this.isDownloaded)
-                return;
-            if ($("span.text-neutral-inverted", this.element).length === 0) {
-                const localeDate = new Intl.DateTimeFormat().format(date);
-                const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
-                this.downloadedMark.append(dateSpan);
-            }
         }
     }
     class ModGrid {
@@ -106,10 +182,11 @@
         get mods() {
             const modsElements = $(`[data-e2eid='${this.type}']`, this.element);
             return modsElements
-                .map((index, element) => new Mod($(element)))
+                .map((index, element) => new ModTile($(element)))
                 .get();
         }
     }
+    // map of mod id to ModData
     const modsData = new Map();
     async function createModsGridChangedEvent() {
         const targetNode = $(".mods-grid, .mods-grid-compact, .mods-grid-list")[0];
@@ -123,21 +200,31 @@
     async function processApiRouterResponse(request, options, response) {
         if (request !== "https://api-router.nexusmods.com/graphql")
             return;
-        if (["UserMods", "ModsListing"].includes(options.body.operationName)) {
+        if (options.body.operationName === "UserMods" || options.body.operationName === "ModsListing") {
             const json = await response.json();
             const data = json.data;
             const modsList = data.mods.nodes;
-            for (const mod of modsList) {
-                modsData[mod.modId] = mod;
+            for (const modObject of modsList) {
+                const modData = new ModData(modObject);
+                modsData.set(modData.modId, modData);
             }
         }
         createModsGridChangedEvent();
     }
+    async function modifyModTile(mod) {
+        if (!mod.data.isDownloaded)
+            return;
+        // date span has already been added to the checkmark element
+        if ($("span.text-neutral-inverted", mod.downloadedMark).length !== 0)
+            return;
+        const localeDate = new Intl.DateTimeFormat().format(mod.data.viewerDownloaded);
+        const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
+        mod.downloadedMark.append(dateSpan);
+    }
     async function modifyModsGrid(e, observer) {
         const modGrid = new ModGrid();
         await Promise.all(modGrid.mods.map((mod) => {
-            const dateDownloaded = new Date(modsData[mod.id].viewerDownloaded);
-            mod.addDownloadDate(dateDownloaded);
+            modifyModTile(mod);
         }));
         // remove records of our modifications so the observer doesn't trigger because of them
         observer.takeRecords();
