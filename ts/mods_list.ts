@@ -230,7 +230,7 @@
             }
         }
 
-        get mods(): Array<ModTile> {
+        get modTiles(): Array<ModTile> {
             const modsElements = $(`[data-e2eid='${this.type}']`, this.element);
             return modsElements
                 .map((index, element) => new ModTile($(element)))
@@ -268,23 +268,22 @@
         createModsGridChangedEvent();
     }
 
-    async function modifyModTile(mod: ModTile) {
-        if (!mod.data.isDownloaded)
-            return;
+    async function modifyModTile(modTile: ModTile) {
+        if (modTile.data.isDownloaded) {
+            // date span has already been added to the checkmark element
+            if ($("span.text-neutral-inverted", modTile.downloadedMark).length !== 0)
+                return;
 
-        // date span has already been added to the checkmark element
-        if ($("span.text-neutral-inverted", mod.downloadedMark).length !== 0)
-            return;
-
-        const localeDate = new Intl.DateTimeFormat().format(mod.data.viewerDownloaded);
-        const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
-        mod.downloadedMark.append(dateSpan);
+            const localeDate = new Intl.DateTimeFormat().format(modTile.data.viewerDownloaded);
+            const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
+            modTile.downloadedMark.append(dateSpan);
+        }
     }
 
     async function modifyModsGrid(e: JQuery.Event, observer: MutationObserver): Promise<void> {
         const modGrid = new ModGrid();
-        await Promise.all(modGrid.mods.map((mod) => {
-            modifyModTile(mod);
+        await Promise.all(modGrid.modTiles.map((modTile) => {
+            modifyModTile(modTile);
         }));
         // remove records of our modifications so the observer doesn't trigger because of them
         observer.takeRecords();

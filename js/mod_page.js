@@ -94,9 +94,8 @@
     // map of mod's href to it's note in the requirements table
     const requirementsNotes = new Map();
     function selectedTab() {
-        return Tabs[$(".modtabs .selected span").text()];
+        return Tabs[$(".modtabs .selected .tab-label").text()];
     }
-    ;
     async function setModsTables() {
         // looking for text seems error-prone
         requirementsTable = new ModsTable($("h3:contains('Nexus requirements') + table"));
@@ -167,6 +166,14 @@
         // @ts-ignore
         requiringTable.element.tablesorter({ sortList: [[2, 1]] });
     }
+    async function modifyDownloadButtons() {
+        const downloadButtons = $(".accordion-downloads a");
+        downloadButtons.on("click", async (e) => {
+            if (e.ctrlKey) {
+                open(e.target.href, "_self");
+            }
+        });
+    }
     async function modifyPopupRequirementsList() {
         // make the popup wider to fit longer mod names and notes
         $(".popup-mod-requirements").css({ "max-width": "75%" });
@@ -190,7 +197,12 @@
                     modifyRequiringTable();
                     populateRequirementsNotes();
                 }],
-            ["ModRequirementsPopUp", modifyPopupRequirementsList]
+            ["ModFilesTab", async () => {
+                    modifyDownloadButtons();
+                }],
+            ["ModRequirementsPopUp", async () => {
+                    modifyPopupRequirementsList();
+                }]
         ]);
         $(document).on("ajaxComplete", (e, xhr, settings) => {
             const url = settings.url;
@@ -206,7 +218,9 @@
             action();
         }
         // trigger the slow download button on the download file page
-        $("#slowDownloadButton").trigger("click");
+        const fileDownloadRoot = $("mod-file-download")[0].shadowRoot;
+        const slowDownloadButton = $("button:contains('Slow download')", fileDownloadRoot);
+        slowDownloadButton.trigger("click");
     }
     // jQuery 2.2.0 used by nexus can't use async in $()
     $(() => afterLoad());

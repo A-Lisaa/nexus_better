@@ -113,8 +113,8 @@
     const requirementsNotes: Map<string, string> = new Map();
 
     function selectedTab(): Tabs {
-        return Tabs[$(".modtabs .selected span").text()];
-    };
+        return Tabs[$(".modtabs .selected .tab-label").text()];
+    }
 
     async function setModsTables() {
         // looking for text seems error-prone
@@ -195,6 +195,15 @@
         requiringTable.element.tablesorter({ sortList: [[2, 1]] });
     }
 
+    async function modifyDownloadButtons(): Promise<void> {
+        const downloadButtons = $(".accordion-downloads a");
+        downloadButtons.on("click", async (e: JQuery.ClickEvent) => {
+            if (e.ctrlKey) {
+                open(e.target.href, "_self");
+            }
+        });
+    }
+
     async function modifyPopupRequirementsList(): Promise<void> {
         // make the popup wider to fit longer mod names and notes
         $(".popup-mod-requirements").css({ "max-width": "75%" });
@@ -220,7 +229,12 @@
                 modifyRequiringTable();
                 populateRequirementsNotes();
             }],
-            ["ModRequirementsPopUp", modifyPopupRequirementsList]
+            ["ModFilesTab", async () => {
+                modifyDownloadButtons();
+            }],
+            ["ModRequirementsPopUp", async () => {
+                modifyPopupRequirementsList();
+            }]
         ]);
 
         $(document).on("ajaxComplete", (e, xhr: JQuery.jqXHR, settings: JQuery.PlainObject) => {
@@ -239,7 +253,9 @@
         }
 
         // trigger the slow download button on the download file page
-        $("#slowDownloadButton").trigger("click");
+        const fileDownloadRoot = $("mod-file-download")[0].shadowRoot;
+        const slowDownloadButton = $("button:contains('Slow download')", fileDownloadRoot);
+        slowDownloadButton.trigger("click");
     }
 
     // jQuery 2.2.0 used by nexus can't use async in $()
