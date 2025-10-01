@@ -217,6 +217,13 @@
         if (action !== undefined) {
             action();
         }
+        // patch setInterval to set timeout of 1 instead of 1000 (as is set in the countdown func), ugly and likely to have unintended consequences, but it just works
+        const originalSetInterval = window.setInterval;
+        window.setInterval = function (handler, timeout) {
+            if (timeout === 1000)
+                timeout = 1;
+            return originalSetInterval(handler, timeout, arguments);
+        };
         // trigger the slow download button on the download file page
         const fileDownloadRoot = $("mod-file-download")[0].shadowRoot;
         const slowDownloadButton = $("button:contains('Slow download')", fileDownloadRoot);
