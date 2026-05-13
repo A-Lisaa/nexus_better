@@ -4,7 +4,7 @@
 // @version      2025-07-30
 // @description  Nya
 // @author       A-Lisa
-// @match        https://www.nexusmods.com/games/*
+// @match        https://www.nexusmods.com/games/*/mods*
 // @match        https://next.nexusmods.com/profile/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nexusmods.com
 // @grant        none
@@ -56,7 +56,7 @@
                     originalXHRonreadystatechange.apply(this);
                 }
             }
-            return originalXHRSend.apply(this, body);
+            return originalXHRSend.call(this, body);
         }
     }
 
@@ -174,24 +174,31 @@
         get isUpdated(): boolean {
             return this.viewerUpdateAvailable === true;
         }
+
+        get isTracked(): boolean {
+            return this.viewerTracked === true;
+        }
     }
 
-    enum ModTileTypes {
-        Standard = "mod-tile" as any,
-        Compact = "mod-tile-compact" as any,
-        List = "mod-tile-list" as any
-    }
-
-    class ModTile {
+    abstract class ModTileBase {
         element: JQuery
 
         constructor(element: JQuery) {
             this.element = element;
         }
 
-        get type(): ModTileTypes {
-            const e2eid = this.element.attr("data-e2eid");
-            return ModTileTypes[e2eid];
+        static fromElement(element: JQuery): ModTileBase {
+            const e2eid = element.attr("data-e2eid");
+            switch (e2eid) {
+                case "mod-tile":
+                    return new ModTileStandard(element);
+                case "mod-tile-compact":
+                    return new ModTileCompact(element);
+                case "mod-tile-list":
+                    return new ModTileList(element);
+                default:
+                    console.error(`Can't create ModTile from an unknown type: ${e2eid}`);
+            }
         }
 
         get href(): string {
@@ -206,8 +213,126 @@
             return modsData.get(this.id);
         }
 
-        get downloadedMark(): JQuery {
-            return $("[data-e2eid='mod-tile-downloaded']", this.element);
+        // original elements
+
+        protected abstract get thumbnail(): JQuery;
+
+        protected abstract get originalCheckmarkDiv(): JQuery;
+
+        // new elements
+
+        protected abstract addCheckmarkDiv(): Promise<void>;
+
+        protected async replaceOriginalCheckmarkDiv(): Promise<void> {
+            this.originalCheckmarkDiv.remove();
+            this.addCheckmarkDiv();
+        }
+
+        protected get checkmarkDivExists(): boolean {
+            const checkmarkDiv = $(".checkmark-div", this.element);
+            if (checkmarkDiv.length > 1) {
+                console.error(`${this} has multiple checkmark divs`);
+                return true;
+            }
+            return checkmarkDiv.length === 1;
+        }
+
+        abstract addCheckmarkInfo(text: string): Promise<void>;
+
+        // get hasCheckmark(): boolean {
+        //     // M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z is a checkmark symbol
+        //     return $("path[d='M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z']", this.element).length !== 0;
+        // }
+
+        // get checkmarkDiv(): JQuery {
+        //     return $("path[d='M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z']", this.element).closest("div");
+        // }
+
+        // get downloadedMark(): JQuery {
+        //     return $("[data-e2eid='mod-tile-downloaded']", this.element).closest("span");
+        // }
+
+        // get updateAvailableMark(): JQuery {
+        //     return $("[data-e2eid='mod-tile-update-available']", this.element).parent().closest("span");
+        // }
+    }
+
+    class ModTileStandard extends ModTileBase {
+        get thumbnail(): JQuery {
+            return this.element.children().eq(0);
+        }
+
+        get originalCheckmarkDiv(): JQuery {
+            return this.thumbnail.children().eq(1);
+        }
+
+        async addCheckmarkDiv(): Promise<void> {
+            const checkmarkDiv = $(`
+                <div class="checkmark-div absolute top-2.5 left-2.5 z-10 rounded bg-neutral-50 px-1.5 py-1 shadow-md">
+                    <span>
+                        <p class="typography-title-sm flex items-center gap-x-1 leading-4 text-neutral-inverted" data-e2eid="mod-tile-downloaded">
+                            <svg viewBox="0 0 24 24" style="width: 1rem; height: 1rem;" role="presentation" class="shrink-0">
+                                <path d="M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z" style="fill: currentcolor;"></path>
+                            </svg>
+                        </p>
+                    </span>
+                </div>
+            `);
+            this.thumbnail.append(checkmarkDiv);
+        }
+
+        async addCheckmarkInfo(text: string): Promise<void> {
+             $(`
+                <span>
+                    <p class="typography-title-sm flex items-center gap-x-1 leading-4 text-neutral-inverted" data-e2eid="mod-tile-downloaded">
+                        <svg viewBox="0 0 24 24" style="width: 1rem; height: 1rem;" role="presentation" class="shrink-0">
+                            <path d="M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z" style="fill: currentcolor;"></path>
+                        </svg>
+                    </p>
+                </span>
+            `);
+        }
+    }
+
+    class ModTileCompact extends ModTileBase {
+        get thumbnail(): JQuery {
+            return $(this.element.children()[0]);
+        }
+
+        async addCheckmarkDiv(): Promise<void> {
+            const checkmarkDiv = $(`
+                <div class="absolute left-1.5 z-10 rounded-md bg-neutral-50 px-1.5 py-1 shadow-md top-1.5">
+                    <span>
+                        <p class="typography-body-sm flex items-center gap-x-1 leading-4 hidden text-neutral-inverted @min-[12rem]/mod-tile:flex">
+                            <svg viewBox="0 0 24 24" style="width: 1rem; height: 1rem;" role="presentation" class="shrink-0">
+                                <path d="M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z" style="fill: currentcolor;"></path>
+                            </svg>
+                        </p>
+                    </span>
+                </div>
+            `);
+            this.thumbnail.append(checkmarkDiv);
+        }
+    }
+
+    class ModTileList extends ModTileBase {
+        get thumbnail(): JQuery {
+            return $($(this.element.children()[0]).children()[0]);
+        }
+
+        async addCheckmarkDiv(): Promise<void> {
+            const checkmarkDiv = $(`
+                <div class="absolute left-1.5 z-10 rounded-md bg-neutral-50 px-1.5 py-1 shadow-md top-1.5">
+                    <span>
+                        <p class="typography-title-sm flex items-center gap-x-1 leading-4 text-neutral-inverted" data-e2eid="mod-tile-downloaded">
+                            <svg viewBox="0 0 24 24" style="width: 1rem; height: 1rem;" role="presentation" class="shrink-0">
+                                <path d="M21,5L9,17L3.5,11.5L4.91,10.09L9,14.17L19.59,3.59L21,5M3,21V19H21V21H3Z" style="fill: currentcolor;"></path>
+                            </svg>
+                        </p>
+                    </span>
+                </div>
+            `);
+            $(this.thumbnail.children()[0]).append(checkmarkDiv);
         }
     }
 
@@ -218,38 +343,16 @@
             this.element = $(".mods-grid, .mods-grid-compact, .mods-grid-list");
         }
 
-        get type(): ModTileTypes {
-            if (this.element.hasClass("mods-grid")) {
-                return ModTileTypes.Standard;
-            }
-            else if (this.element.hasClass("mods-grid-compact")) {
-                return ModTileTypes.Compact;
-            }
-            else if (this.element.hasClass("mods-grid-list")) {
-                return ModTileTypes.List;
-            }
-        }
-
-        get modTiles(): Array<ModTile> {
-            const modsElements = $(`[data-e2eid='${this.type}']`, this.element);
+        get modTiles(): Array<ModTileBase> {
+            const modsElements = $("[data-e2eid='mod-tile'], [data-e2eid='mod-tile-compact'], [data-e2eid='mod-tile-list']", this.element);
             return modsElements
-                .map((index, element) => new ModTile($(element)))
+                .map((index, element) => ModTileBase.fromElement($(element)))
                 .get();
         }
     }
 
     // map of mod id to ModData
     const modsData: Map<number, ModData> = new Map();
-
-    async function createModsGridChangedEvent(): Promise<void> {
-        const targetNode = $(".mods-grid, .mods-grid-compact, .mods-grid-list")[0];
-        const config = { attibutes: true, childList: true, subtree: true };
-        const observer = new MutationObserver(() => {
-            const e = $.Event("modsGridChanged");
-            $(document).trigger(e, [ observer ]);
-        });
-        observer.observe(targetNode, config);
-    }
 
     async function processApiRouterResponse(request: string, options: any, response: Response): Promise<void> {
         if (request !== "https://api-router.nexusmods.com/graphql")
@@ -264,19 +367,26 @@
                 modsData.set(modData.modId, modData);
             }
         }
-
-        createModsGridChangedEvent();
     }
 
-    async function modifyModTile(modTile: ModTile) {
-        if (modTile.data.isDownloaded) {
-            // date span has already been added to the checkmark element
-            if ($("span.text-neutral-inverted", modTile.downloadedMark).length !== 0)
-                return;
-
+    async function modifyModTile(modTile: ModTileBase) {
+        if (modTile.data.isDownloaded && $(".checkmark-downloaded", modTile.element).length === 0) {
             const localeDate = new Intl.DateTimeFormat().format(modTile.data.viewerDownloaded);
-            const dateSpan = $(`<span class="text-neutral-inverted">${localeDate}</span>`);
-            modTile.downloadedMark.append(dateSpan);
+            const dateSpan = $(`<span class="text-neutral-inverted checkmark-downloaded">${localeDate}</span>`);
+            $("p", modTile.downloadedMark).append(dateSpan);
+        }
+
+        if (modTile.data.isTracked && $(".checkmark-tracked", modTile.element).length === 0) {
+            const trackedTextSpan = $(`<span class="text-neutral-inverted checkmark-tracked">Tracked</span>`);
+            if (!modTile.hasCheckmark) {
+                await modTile.addCheckmarkDiv();
+                $("p", modTile.downloadedMark).append(trackedTextSpan);
+            }
+            else {
+                const trackedOuterSpan = modTile.downloadedMark.clone();
+                trackedOuterSpan.append(trackedTextSpan);
+                modTile.downloadedMark.after(trackedOuterSpan);
+            }
         }
     }
 
@@ -289,8 +399,19 @@
         observer.takeRecords();
     }
 
+    async function createModsGridChangedEvent(): Promise<void> {
+        const targetNode = $(".mods-grid, .mods-grid-compact, .mods-grid-list")[0];
+        const config = { attibutes: true, childList: true, subtree: true };
+        const observer = new MutationObserver(() => {
+            const e = $.Event("modsGridChanged");
+            $(document).trigger(e, [ observer ]);
+        });
+        observer.observe(targetNode, config);
+    }
+
     async function beforeLoad(): Promise<void> {
         patchFetch();
+        createModsGridChangedEvent();
         responseProcessors.push(processApiRouterResponse);
 
         $(document).on("modsGridChanged", modifyModsGrid);
