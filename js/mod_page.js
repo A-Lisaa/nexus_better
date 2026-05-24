@@ -1,19 +1,137 @@
 // ==UserScript==
-// @name         Nexus Better Requiring List
+// @name         Nexus Better Mod Page
 // @namespace    http://tampermonkey.net/
-// @version      2025-10-02
+// @version      2026-05-24
 // @description  Nya
 // @author       A-Lisa
 // @match        https://www.nexusmods.com/*/mods/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nexusmods.com
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
+//#endregion
 (() => {
     "use strict";
     class Utils {
-        // string
+        /**
+         * Capitalizes str
+         */
         static capitalize(str) {
-            return str.at(0).toUpperCase() + str.substring(1);
+            const firstLetter = str.at(0);
+            if (firstLetter === undefined)
+                return "";
+            return firstLetter.toUpperCase() + str.substring(1);
+        }
+        static setupObserver(targetNode, changedEventName) {
+            const config = { attributes: true, childList: true, subtree: true };
+            const observer = new MutationObserver(() => {
+                const e = $.Event(changedEventName);
+                $(document).trigger(e, [observer]);
+            });
+            observer.observe(targetNode, config);
+        }
+    }
+    class FetchArgs {
+        resource;
+        options;
+        constructor(resource, options) {
+            this.resource = resource;
+            this.options = options;
+        }
+        get resourceURL() {
+            if (this.resource instanceof Request)
+                return this.resource.url;
+            if (this.resource instanceof URL)
+                return this.resource.href;
+            return this.resource;
+        }
+        get optionsJSON() {
+            const optionsJSON = JSON.parse(JSON.stringify(this.options));
+            if (optionsJSON.body !== undefined)
+                optionsJSON.body = JSON.parse(optionsJSON.body);
+            return optionsJSON;
+        }
+    }
+    class FetchArgsAndResponse extends FetchArgs {
+        response;
+        // ALWAYS await this method to ensure it finishes before response returns to original caller
+        async modifyResponseText(modifier) {
+            // await to be sure that modifier finishes before response returns to original caller
+            const modifiedText = await modifier(await this.response.text());
+            const modifiedResponse = new Response(modifiedText, {
+                status: this.response.status,
+                statusText: this.response.statusText,
+                headers: this.response.headers
+            });
+            this.response = modifiedResponse;
+        }
+        constructor(resource, options, response) {
+            super(resource, options);
+            this.response = response;
+        }
+    }
+    class FetchInterceptor {
+        static fetchPatchedBefore = false;
+        static actionsBeforeSend = [];
+        static actionsAfterSend = [];
+        static async patchFetch() {
+            if (this.fetchPatchedBefore) {
+                console.warn("FetchInterceptor.patchFetch has already patched fetch, aborting.");
+                return;
+            }
+            // can't make window.fetch an attribute of FetchInterceptor cause it throws
+            // "'fetch' called on an object that does not implement interface Window."
+            const originalFetch = window.fetch;
+            window.fetch = async function (resource, options) {
+                const fetchArgs = new FetchArgs(resource, options);
+                for (const action of FetchInterceptor.actionsBeforeSend) {
+                    // await to be sure that action finishes before response returns to original caller
+                    await action(fetchArgs);
+                }
+                const response = await originalFetch(fetchArgs.resource, fetchArgs.options);
+                const fetchArgsAndResponse = new FetchArgsAndResponse(fetchArgs.resource, fetchArgs.options, response);
+                for (const action of FetchInterceptor.actionsAfterSend) {
+                    // await to be sure that action finishes before response returns to original caller
+                    await action(fetchArgsAndResponse);
+                }
+                return fetchArgsAndResponse.response;
+            };
+            this.fetchPatchedBefore = true;
+        }
+        static async addActionBeforeSend(action) {
+            this.actionsBeforeSend.push(action);
+        }
+        static async addActionAfterSend(action) {
+            this.actionsAfterSend.push(action);
+        }
+    }
+    class AjaxCompleteActions {
+        static ajaxCompleteHandlerAddedEarlier = false;
+        static actions = [];
+        static async addAjaxCompleteHandler() {
+            if (this.ajaxCompleteHandlerAddedEarlier) {
+                console.warn("ajaxComplete handler has been added already, aborting");
+                return;
+            }
+            $(document).on("ajaxComplete", (e, xhr, settings) => {
+                for (const action of this.actions) {
+                    action(e, xhr, settings);
+                }
+            });
+            this.ajaxCompleteHandlerAddedEarlier = true;
+        }
+        static async addAction(action) {
+            this.actions.push(action);
+        }
+        static async addRegexAction(regex, action) {
+            const func = async (e, xhr, settings) => {
+                const url = settings.url;
+                if (regex.test(url)) {
+                    console.log(`Calling action for ${regex} on ${url}`);
+                    action();
+                }
+            };
+            this.addAction(func);
         }
     }
     let Tabs;
@@ -48,10 +166,20 @@
             this.element = element;
         }
         get href() {
-            return $("a", this.element).attr("href");
+            const href = $("a", this.element).attr("href");
+            if (href === undefined) {
+                console.error(`ModRow.href === undefined where ModRow.element === ${this.element}, something went wrong, returning empty string`);
+                return "";
+            }
+            return href;
         }
         get id() {
-            return parseInt(this.href.split("/").at(-1));
+            const id = this.href.split("/").at(-1);
+            if (id === undefined) {
+                console.error(`ModRow.id === undefined where ModRow.element === ${this.element}, something went wrong, returning -1`);
+                return -1;
+            }
+            return parseInt(id);
         }
         get stats() {
             const stats = modsStats.get(this.id) || new ModStats(this.id, 0, 0, 0);
@@ -94,10 +222,10 @@
         }
     }
     // practically consts
+    // use ONLY after load
     var requirementsTable;
-    var requiringTable;
     var translationsTable;
-    const gameId = current_game_id;
+    var gameId;
     // map of mod's id to it's stats
     const modsStats = new Map();
     // map of mod's href to it's note in the requirements table
@@ -114,19 +242,13 @@
         // so if file_id exists it should be a file download page
         return new URL(window.location.href).searchParams.has("file_id");
     }
-    async function setModsTables() {
-        // looking for text seems error-prone
-        requirementsTable = new ModsTable($("h3:contains('Nexus requirements') + table"));
-        requiringTable = new ModsTable($("h3:contains('Mods requiring this file') + table"));
-        translationsTable = new ModsTable($("h3:contains('Translations available on the Nexus') + table"));
-    }
     /**
      * Converts GlobalModStats object into a Map
      */
     async function populateModsStats() {
         for (const modId in GlobalModStats[gameId]) {
             const modStats = GlobalModStats[gameId][modId];
-            modsStats.set(parseInt(modId), new ModStats(modStats.id, modStats.unique, modStats.total, modStats.views));
+            modsStats.set(parseInt(modId), new ModStats(parseInt(modId), modStats.unique, modStats.total, modStats.views));
         }
     }
     // call if tab is description
@@ -134,19 +256,15 @@
         const requirements = requirementsTable.rows;
         requirements.each(function () {
             const href = $("a", this).attr("href");
+            if (href === undefined) {
+                console.error(`Mod ${this} from requirements table has href === undefined, the fuck?`);
+                return;
+            }
             const note = $(".table-require-notes", this).text();
             requirementsNotes.set(href, note);
         });
     }
-    // async function processDownloadCountResponse(response: Response): Promise<void> {
-    //     const statsText = await response.text();
-    //     await Papa.parse(statsText).data.forEach((modStatsArray: Array<string>) => {
-    //         // each line in csv is id,totalDLs,uniqueDLs,totalViews
-    //         const modStats = new ModStats(parseInt(modStatsArray[0]), parseInt(modStatsArray[2]), parseInt(modStatsArray[1]), parseInt(modStatsArray[3]));
-    //         modsStats.set(modStats.id, modStats);
-    //     });
-    // }
-    async function modifyRequiringTableHeaders() {
+    async function modifyRequiringTableHeaders(requiringTable) {
         const uniqueDLsHeader = $("<th class='table-require-uniqueDLs header'><span class='table-header'>Unique DLs</span></th>");
         const totalDLsHeader = $("<th class='table-require-totalDLs header'><span class='table-header'>Total DLs</span></th>");
         const totalViewsHeader = $("<th class='table-require-totalViews header'><span class='table-header'>Total Views</span></th>");
@@ -155,7 +273,7 @@
     async function modifyRequiringTableMod(mod, translationsTableModsLinks) {
         if (translationsTableModsLinks.includes(mod.href)) {
             mod.hide();
-            // don't return here because adding data to hidden mods resolves some issues when the table is empty
+            // don't return here because adding data to hidden mods resolves some issues when the table would become empty after hiding
         }
         // limit the max-width of the notes cell so that it doesn't overflow in width when the note is very long, 350px seems to work fine
         const notesData = $(mod.element.children()[1]);
@@ -167,7 +285,7 @@
         const totalViewsData = `<td class='table-require-totalViews'>${stats.totalViews}</td>`;
         mod.element.append(uniqueDLsData, totalDLsData, totalViewsData);
     }
-    async function modifyRequiringTableRows() {
+    async function modifyRequiringTableRows(requiringTable) {
         const translationsTableModsLinks = translationsTable.mods.map((mod) => mod.href);
         const promises = [];
         const requiringTableMods = requiringTable.mods;
@@ -176,22 +294,58 @@
         }
         await Promise.all(promises);
     }
-    async function modifyRequiringTable() {
+    async function modifyRequiringTable(requiringTable) {
         // remove handlers earlier so that it doesn't interrupt modifications
         await requiringTable.removeHandlers();
         await Promise.all([
-            modifyRequiringTableHeaders(),
-            modifyRequiringTableRows()
+            modifyRequiringTableHeaders(requiringTable),
+            modifyRequiringTableRows(requiringTable)
         ]);
         requiringTable.element.tablesorter({ sortList: [[2, 1]] });
     }
+    //#region Files tab
     async function modifyDownloadButtons() {
-        const downloadButtons = $(".accordion-downloads a");
-        downloadButtons.on("click", async (e) => {
-            if (e.ctrlKey) {
-                open(e.target.href, "_self");
-            }
-        });
+        const downloadModal = $("download-modal");
+        if (downloadModal.length === 0) {
+            // old style
+            const downloadButtons = $(".accordion-downloads a");
+            downloadButtons.on("click", async (e) => {
+                if (e.ctrlKey) {
+                    open(e.target.href, "_self");
+                }
+            });
+        }
+        else {
+            // new style
+            downloadModal.each(function () {
+                const thisDownloadModal = $(this);
+                const downloadLinks = thisDownloadModal.attr("download-links");
+                if (downloadLinks === undefined) {
+                    console.error("download-modal has no download-links attr, the fuck?");
+                    return;
+                }
+                const downloadLinksJson = JSON.parse(downloadLinks);
+                const waitForDownloadButtons = setInterval(() => {
+                    const shadowRoot = thisDownloadModal[0].shadowRoot;
+                    if (shadowRoot === null)
+                        return;
+                    const downloadButtons = $("button", shadowRoot);
+                    if (downloadButtons.length === 0)
+                        return;
+                    $(downloadButtons[0]).on("click", async (e) => {
+                        if (e.ctrlKey) {
+                            open(downloadLinksJson.vortexDownloadUrl, "_self");
+                        }
+                    });
+                    $(downloadButtons[1]).on("click", async (e) => {
+                        if (e.ctrlKey) {
+                            open(downloadLinksJson.downloadUrl, "_self");
+                        }
+                    });
+                    clearInterval(waitForDownloadButtons);
+                }, 10);
+            });
+        }
     }
     async function modifyPopupRequirementsList() {
         // make the popup wider to fit longer mod names and notes
@@ -200,32 +354,41 @@
         $(".popup-mod-requirements li").each(function () {
             // local this - each mod's li
             const href = $("a", this).attr("href");
+            if (href === undefined) {
+                console.error(`Mod ${this} from requirements popup has href === undefined, the fuck?`);
+                return;
+            }
             const note = requirementsNotes.get(href) || "";
             const span = $("span", this);
             span.text(`${span.text()} [Notes: ${note}]`);
         });
     }
-    async function patchSetInterval() {
-        // patch setInterval to set timeout of 1 instead of 1000 (as is set in the countdown func), ugly and likely to have unintended consequences,
-        // but it just works i.e. makes the countdown on download page instant
-        const originalSetInterval = window.setInterval;
-        window.setInterval = function (handler, timeout) {
-            if (timeout === 1000)
-                timeout = 1;
-            return originalSetInterval(handler, timeout, arguments);
-        };
-    }
-    // TODO: make files downloadable w\o an account
-    async function clickSlowDownloadButton() {
-        // trigger the slow download button on the download file page
-        const fileDownloadRoot = $("mod-file-download")[0].shadowRoot;
-        const slowDownloadButton = $("button:contains('Slow download')", fileDownloadRoot);
-        slowDownloadButton.trigger("click");
+    /**
+     * By modifying mod-file-download's attributes before it's contents exist (they load a bit later),
+     * we can set values of mod-file-download's attributes to whatever we want to be used.
+     * IMPORTANT: works unreliably because sometimes modifications are made too late.
+     */
+    async function modifyModFileDownloadAttributes() {
+        // timeout-seconds determines how long you have to wait before download starts,
+        // setting it to 0 eliminates waiting.
+        $("mod-file-download").attr("timeout-seconds", 0);
+        // maybe makes files downloadable w\o an account.
+        $("mod-file-download").attr("user-is-logged-in", "true");
     }
     async function fileDownloadPageAction() {
-        patchSetInterval();
-        clickSlowDownloadButton();
+        // trigger the slow download button on the download file page
+        const waitForModFileDownloadShadowRoot = setInterval(() => {
+            const modFileDownloadShadowRoot = $("mod-file-download")[0].shadowRoot;
+            if (modFileDownloadShadowRoot === null)
+                return;
+            const slowDownloadButton = $("button:contains('Slow download')", modFileDownloadShadowRoot);
+            if (slowDownloadButton.length !== 0) {
+                slowDownloadButton.trigger("click");
+                clearInterval(waitForModFileDownloadShadowRoot);
+            }
+        }, 10);
     }
+    //#endregion Files tab
     //#region File Contents
     async function modifyFileContentsFileDirExpand(fileDirExpand, fileDir) {
         const childrenFileDirExpands = $("> .dir-expand", fileDir);
@@ -249,13 +412,32 @@
         }
     }
     //#endregion
-    const TabActions = new Map([
+    async function handleRequiredByResponse(fetchArgsAndResponse) {
+        // url to get required-by-table is like this https://www.nexusmods.com/api/games/1303/mods/1538/required-by?show_adult_content=1
+        if (fetchArgsAndResponse.resourceURL.indexOf("required-by") === -1)
+            return;
+        await fetchArgsAndResponse.modifyResponseText(async (responseText) => {
+            // wrap into div to get just one element instead of seven separate
+            const responseElement = $(`<div>${responseText}</div>`);
+            const requiringTable = new ModsTable($(".required-by-table", responseElement));
+            await modifyRequiringTable(requiringTable);
+            return responseElement.html();
+        });
+    }
+    async function addFetchActions() {
+        FetchInterceptor.addActionAfterSend(handleRequiredByResponse);
+    }
+    const AjaxCompleteRegexActions = new Map([
+        [new RegExp(String.raw `https://file-metadata\.nexusmods\.com/file/nexus-files-s3-meta/\d+/\d+/.+`), async () => {
+                modifyFileContentsFileList();
+            }],
+    ]);
+    const AjaxCompleteTabActions = new Map([
         [Tabs.Description, async () => {
-                setModsTables();
+                requirementsTable = new ModsTable($("h3:contains('Nexus requirements') + table"));
+                translationsTable = new ModsTable($(".translation-table"));
                 getModStats(gameId, populateModsStats);
                 populateRequirementsNotes();
-                //await fetch(`https://staticstats.nexusmods.com/live_download_counts/mods/${gameId}.csv`).then(processDownloadCountResponse);
-                modifyRequiringTable();
             }],
         [Tabs.Files, async () => {
                 if (isFileDownloadPage()) {
@@ -263,63 +445,51 @@
                     return;
                 }
                 modifyDownloadButtons();
-            }]
+            }],
     ]);
-    class AjaxCompleteActions {
-        static addedAjaxCompleteHandler = false;
-        static actions = [];
-        static async addAction(action) {
-            this.actions.push(action);
-        }
-        static async addRegexAction(regex, action) {
-            const func = async (e, xhr, settings) => {
-                const url = settings.url;
-                if (regex.test(url)) {
-                    console.log(`Calling action for ${regex} on ${url}`);
-                    action();
-                }
-            };
-            this.addAction(func);
-        }
-        static async addWidgetAction(widget, action) {
-            const widgetRegex = new RegExp(String.raw `/Core/Libs/Common/Widgets/${widget}\?id=\d+&game_id=\d+`);
-            this.addRegexAction(widgetRegex, action);
-        }
-        static async addAjaxCompleteHandler() {
-            if (this.addedAjaxCompleteHandler) {
-                console.warn("ajaxComplete handler has been added already, aborting");
-                return;
-            }
-            $(document).on("ajaxComplete", (e, xhr, settings) => {
-                for (const action of this.actions) {
-                    action(e, xhr, settings);
-                }
-            });
-        }
-    }
+    const AjaxCompleteWidgetActions = new Map([
+        ["ModRequirementsPopUp", async () => {
+                modifyPopupRequirementsList();
+            }],
+    ]);
     async function addAjaxCompleteActions() {
-        for (const [tab, action] of TabActions.entries()) {
-            AjaxCompleteActions.addWidgetAction(`Mod${Tabs[tab]}Tab`, action);
+        for (const [regex, action] of AjaxCompleteRegexActions.entries()) {
+            AjaxCompleteActions.addRegexAction(regex, action);
         }
-        AjaxCompleteActions.addWidgetAction("ModRequirementsPopUp", async () => {
-            modifyPopupRequirementsList();
-        });
-        // preview file contents
-        AjaxCompleteActions.addRegexAction(new RegExp(String.raw `https://file-metadata\.nexusmods\.com/file/nexus-files-s3-meta/\d+/\d+/.+`), async () => {
-            modifyFileContentsFileList();
-        });
+        for (const [tab, action] of AjaxCompleteTabActions.entries()) {
+            const widgetRegex = new RegExp(String.raw `/Core/Libs/Common/Widgets/Mod${Tabs[tab]}Tab\?id=\d+&game_id=\d+`);
+            AjaxCompleteActions.addRegexAction(widgetRegex, action);
+        }
+        for (const [widget, action] of AjaxCompleteWidgetActions.entries()) {
+            const widgetRegex = new RegExp(String.raw `/Core/Libs/Common/Widgets/${widget}\?id=\d+&game_id=\d+`);
+            AjaxCompleteActions.addRegexAction(widgetRegex, action);
+        }
     }
     /**
-     * called when the script runs
+     * called at the earliest possible point in script's runtime
      */
     async function onStart() {
-        AjaxCompleteActions.addAjaxCompleteHandler();
-        addAjaxCompleteActions();
+        // called at earliest possible point
+        FetchInterceptor.patchFetch();
+        addFetchActions();
+        if (isFileDownloadPage()) {
+            const waitForModFileDownload = setInterval(() => {
+                const modFileDownloadExists = document.getElementsByTagName("mod-file-download").length !== 0;
+                if (modFileDownloadExists) {
+                    modifyModFileDownloadAttributes();
+                    clearInterval(waitForModFileDownload);
+                }
+            }, 10);
+        }
     }
     async function afterLoad() {
+        gameId = current_game_id;
+        // called after load because requires JQuery
+        AjaxCompleteActions.addAjaxCompleteHandler();
+        addAjaxCompleteActions();
         // call the action for selected tab on load if the action exists
         const selectedTab = getSelectedTab();
-        const tabAction = TabActions.get(selectedTab);
+        const tabAction = AjaxCompleteTabActions.get(selectedTab);
         if (tabAction !== undefined) {
             tabAction();
         }
@@ -327,5 +497,9 @@
     }
     onStart();
     // jQuery 2.2.0 used by nexus can't use async in $()
-    $(() => afterLoad());
+    // $(() => afterLoad());
+    if (document.readyState === "complete")
+        afterLoad();
+    else
+        document.addEventListener("DOMContentLoaded", afterLoad);
 })();
